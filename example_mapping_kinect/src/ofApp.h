@@ -22,23 +22,17 @@
 #include "ofMain.h"
 
 #include "ofxCv.h"
-#include "ofxActiveScan.h"
 #include "ofxKinect.h"
 
 class ofApp : public ofBaseApp {
 public:
 	void setup();
-	void init();
 	void update();
 	void draw();
 	void drawPointCloud();
 	void keyPressed(int);
-	void dragEvent(ofDragInfo);
-	
-	vector<string> rootDir;
 	
 private:
-	ofxActiveScan::Options options;
 	ofMesh mesh;
 	vector<ofMesh> preMeshes;
 	ofEasyCam cam;
@@ -52,6 +46,4 @@ private:
 	int cw, ch;
 	
 	ofxKinect kinect;
-	
-	bool pathLoaded;
 };
