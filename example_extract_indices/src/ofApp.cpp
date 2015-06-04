@@ -6,8 +6,8 @@ void ofApp::setup(){
 	
 	glEnable(GL_DEPTH_TEST);
 	
-	ofxPCL::PointXYZCloud cloud(new ofxPCL::PointXYZCloud::element_type);
-	vector<ofxPCL::PointXYZCloud> clouds;
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+	vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> clouds;
 	
 	mesh.load(ofToDataPath("out.ply"));
 	cloud = ofxPCL::toPCL<ofxPCL::PointXYZCloud>(mesh);
@@ -32,7 +32,7 @@ void ofApp::setup(){
 	seg.setDistanceThreshold(distance_threshold);
 	seg.setMaxIterations(500);
 	
-	ofxPCL::PointXYZCloud temp(new ofxPCL::PointXYZCloud::element_type(*cloud));
+	pcl::PointCloud<pcl::PointXYZ>::Ptr temp(new pcl::PointCloud<pcl::PointXYZ>(*cloud));
 	const size_t original_szie = temp->points.size();
 	
 	pcl::ExtractIndices<pcl::PointXYZ> extract;
@@ -49,7 +49,7 @@ void ofApp::setup(){
 		if (inliers->indices.size() < min_points_limit)
 			break;
 		
-		ofxPCL::PointXYZCloud filterd_point_cloud(new ofxPCL::PointXYZCloud::element_type);
+		pcl::PointCloud<pcl::PointXYZ>::Ptr filterd_point_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 		
 		extract.setInputCloud(temp);
 		extract.setIndices(inliers);
@@ -65,7 +65,7 @@ void ofApp::setup(){
 		extract.filter(*temp);
 		
 		ofMesh m;
-		ofxPCL::PointNormalCloud cloud_with_normals(new ofxPCL::PointNormalCloud::element_type);
+		pcl::PointCloud<pcl::PointNormal>::Ptr cloud_with_normals(new pcl::PointCloud<pcl::PointNormal>);
 		
 		ofxPCL::normalEstimation(filterd_point_cloud, cloud_with_normals);
 		
@@ -76,18 +76,11 @@ void ofApp::setup(){
 		
 		ofVec3f center = m.getCentroid();
 		ofVec3f planeNormal(coefficients->values[0], coefficients->values[1], coefficients->values[2]);
-		float planeScale = 1000;
-		float normalVecScale = 1;
 		
 		ofVec3f tangent, bitangent;
 		ofVec3f arb(0, 1, 0);
 		tangent = arb.cross(planeNormal).normalize();
 		bitangent = planeNormal.cross(tangent).normalize();
-		
-		ofVec3f v1(center - (tangent * planeScale) - (bitangent * planeScale));
-		ofVec3f v2(center + (tangent * planeScale) - (bitangent * planeScale));
-		ofVec3f v3(center + (tangent * planeScale) + (bitangent * planeScale));
-		ofVec3f v4(center - (tangent * planeScale) + (bitangent * planeScale));
 		
 		for(int j = 0; j < m.getNumVertices(); j++) {
 			float x = m.getVertex(j).dot(tangent) * 0.001;
