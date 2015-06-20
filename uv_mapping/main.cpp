@@ -68,15 +68,17 @@ public:
 class RgbdCluster {
 public:
 	Mat mask;
-	Mat depth;
-	Mat points3d;
-	Mat normals;
-	Mat pointsIndex;
+	Mat depth; // original depth image
+	Mat points3d; // original 3d points
+	Mat normals; // original normal map
+	Mat pointsIndex; // image to vector point map
 	vector<RgbdPoint> points;
+	vector<int> faceIndices; // face indices
 	bool bPlane;
 	bool bPointsUpdated;
+	bool bFaceIndicesUpdated;
 
-	RgbdCluster() : bPlane(false), bPointsUpdated(false) {}
+	RgbdCluster() : bPlane(false), bPointsUpdated(false), bFaceIndicesUpdated(false) {}
 
 	int getNumPoints() {
 		if(bPointsUpdated)
@@ -105,6 +107,53 @@ public:
 		}
 		bPointsUpdated = true;
 	}
+
+	void calculateFaceIndices() {
+		if(!bPointsUpdated) {
+			calculatePoints();
+		}
+		for (int i = 0; i < mask.rows; i++)  {
+			for (int j = 0; j < mask.cols; j++)  {
+				if(mask.at<uchar>(i, j) == 0) {
+					continue;
+				}
+				if(i + 1 < mask.rows &&
+					j + 1 < mask.cols &&
+					mask.at<uchar>(i + 1, j) > 0 &&
+					mask.at<uchar>(i, j + 1) > 0 &&
+					mask.at<uchar>(i + 1, j + 1) > 0)
+				{
+					faceIndices.push_back(pointsIndex.at<int>(i, j));
+					faceIndices.push_back(pointsIndex.at<int>(i+1, j));
+					faceIndices.push_back(pointsIndex.at<int>(i, j+1));
+					faceIndices.push_back(pointsIndex.at<int>(i, j+1));
+					faceIndices.push_back(pointsIndex.at<int>(i+1, j));
+					faceIndices.push_back(pointsIndex.at<int>(i+1, j+1));
+				}
+			}
+		}
+
+	}
+
+	void save(string &path) {
+		if(!bFaceIndicesUpdated) {
+			calculateFaceIndices();
+		}
+		ofstream fs;
+		fs.open(path);
+		for(int i = 0; i < points.size(); i++) {
+			auto & v = points.at(i).world_xyz;
+			fs << "v " << to_string(v.x) << " " << to_string(v.y) << " " << to_string(v.z) << endl;
+		}
+		for(int i = 0; i < faceIndices.size(); i+=3) {
+			fs << "f " << to_string(faceIndices.at(i))
+				<< "// " << to_string(faceIndices.at(i+1))
+				<< "// " << to_string(faceIndices.at(i+2))
+				<< "//" << endl;
+		}
+		fs.close();
+	}
+
 };
 
 void eliminateSmallClusters(vector<RgbdCluster>& clusters, int minPoints) {
@@ -221,21 +270,10 @@ int main( int argc, char** argv )
 		//deleteEmptyClusters(smallClusters);
 		for(int j = 0; j < smallClusters.size(); j++) {
 			imshow(to_string(i) + to_string(j), smallClusters.at(j).mask * 255);
+			smallClusters.at(j).save(to_string(i) + to_string(j) + "mesh.obj");
 		}
 	}
-	/*
-	for(int i = 0; i < meshes.size(); i++) {
-		ofstream myfile;
-		myfile.open (to_string(i) + "mesh.obj");
-		for(int j = 0; j < meshes.at(i).size(); j++) {
-			auto & v = meshes.at(i).at(j);
-			myfile << "v " << to_string(v.x) << " " << to_string(v.y) << " " << to_string(v.z) << endl;
-		}
-		for(int j = 0; j < indices.at(i).size(); j+=3) {
-			myfile << "f " << to_string(indices.at(i).at(j)) << "// " << to_string(indices.at(i).at(j+1)) << "// " << to_string(indices.at(i).at(j+2)) << "//" << endl;
-		}
-		myfile.close();
-	}*/
+
 	waitKey(0);
 	return 0;
 }
