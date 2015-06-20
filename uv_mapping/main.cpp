@@ -89,20 +89,37 @@ public:
 		points.clear();
 		for (int i = 0; i < mask.rows; i++)  {
 			for (int j = 0; j < mask.cols; j++)  {
-				if(mask.at<uchar>(i, j) > 0 && depth.at<float>(i, j) == 0) {
-					RgbdPoint point;
-					point.world_xyz = points3d.at<Point3f>(i, j);
-					point.image_xy = Point2i(j, i);
-
-					mask.at<uchar>(i, j) = 0;
-					pointsIndex.at<int>(i, j) = points.size();
-					points.push_back(point);
+				if(mask.at<uchar>(i, j) > 0) {
+					if(depth.at<float>(i, j) > 0) {
+						RgbdPoint point;
+						point.world_xyz = points3d.at<Point3f>(i, j);
+						point.image_xy = Point2i(j, i);
+						
+						pointsIndex.at<int>(i, j) = points.size();
+						points.push_back(point);
+					} else {
+						mask.at<uchar>(i, j) = 0;
+					}
 				}
 			}
 		}
 		bPointsUpdated = true;
 	}
 };
+
+void eliminateSmallClusters(vector<RgbdCluster>& clusters, int minPoints) {
+	for(int i = 0; i < clusters.size(); ) {
+		if(clusters.at(i).getNumPoints() >= 0 && clusters.at(i).getNumPoints() <= minPoints) {
+			clusters.erase(clusters.begin() + i);
+		} else {
+			i++;
+		}
+	}
+}
+
+void deleteEmptyClusters(vector<RgbdCluster>& clusters) {
+	eliminateSmallClusters(clusters, 0);
+}
 
 void planarSegmentation(RgbdCluster& mainCluster, vector<RgbdCluster>& clusters, int maxPlaneNum = 3, int minArea = 400) {
 	// assert frame size == points3d size
@@ -131,14 +148,19 @@ void planarSegmentation(RgbdCluster& mainCluster, vector<RgbdCluster>& clusters,
 	}
 }
 
-void euclideanClustering() {
-/*	connectedComponentsWithStats(clusters.at(i).mask, labels, stats, centroids, 8);
-	for (int i = 0; i < clusters.at(i).mask.rows; i++)  {
-		for (int j = 0; j < clusters.at(i).mask.cols; j++)  {
-			if(src.at<uchar>(i, j) == 0) continue;
-			aggregatedLabels.at<int>(i, j) = labels.at<int>(i, j) + curLabel;
+void euclideanClustering(RgbdCluster& mainCluster, vector<RgbdCluster>& clusters, int minArea = 400) {
+	Mat labels, stats, centroids;
+	connectedComponentsWithStats(mainCluster.mask, labels, stats, centroids, 8);
+	for(int label = 1; label < stats.rows; label++) { // 0: background label
+		if(stats.at<int>(label, CC_STAT_AREA) >= minArea) {
+			clusters.push_back(RgbdCluster());
+			RgbdCluster& cluster = clusters.back();
+			mainCluster.depth.copyTo(cluster.depth);
+			mainCluster.points3d.copyTo(cluster.points3d);
+			compare(labels, label, cluster.mask, CMP_EQ);
+			cluster.calculatePoints();
 		}
-	}*/
+	}
 }
 
 int main( int argc, char** argv )
@@ -181,6 +203,7 @@ int main( int argc, char** argv )
 	mainCluster.depth = frame->depth;
 	vector<RgbdCluster> clusters;
 	planarSegmentation(mainCluster, clusters);
+	deleteEmptyClusters(clusters);
 
 	for(int i = 0; i < clusters.size(); i++) {
 		imshow(to_string(i), clusters.at(i).mask * 255);
@@ -192,107 +215,15 @@ int main( int argc, char** argv )
 		if(clusters.at(i).bPlane) {
 			continue;
 		}
-
+		
+		vector<RgbdCluster> smallClusters;
+		euclideanClustering(clusters.at(i), smallClusters);
+		//deleteEmptyClusters(smallClusters);
+		for(int j = 0; j < smallClusters.size(); j++) {
+			imshow(to_string(i) + to_string(j), smallClusters.at(j).mask * 255);
+		}
 	}
 	/*
-	int minArea = 400;
-	int curLabel = 0;
-	Mat colorLabels = Mat_<Vec3f>(mask.rows, mask.cols);
-	Mat aggregatedLabels = Mat_<int>::ones(mask.rows, mask.cols) * -1;
-	Mat aggregatedStats;
-	Mat aggregatedCentroids;
-	int maxPlaneNum = 3;
-	for(int l = 0; l < maxPlaneNum + 1; l++) {
-		Mat labels, stats, centroids;
-		Mat src(mask.rows, mask.cols, CV_8U);
-		uchar curIndex = 1;
-		for (int i = 0; i < mask.rows; i++)  {
-			for (int j = 0; j < mask.cols; j++)  {
-				src.at<uchar>(i, j) = 0;
-				if(depth.at<float>(i, j) == 0) {
-					continue;
-				}
-				if(l == maxPlaneNum) {
-					src.at<uchar>(i, j) = (mask.at<uchar>(i, j) >= l);
-				} else {
-					src.at<uchar>(i, j) = (mask.at<uchar>(i, j) == l);
-				}
-			}
-		}
-
-		int numLabels = connectedComponentsWithStats(src, labels, stats, centroids, 8);
-		if(!aggregatedStats.data) {
-			aggregatedStats = stats;
-			aggregatedCentroids = centroids;
-		} else {
-			aggregatedStats.push_back(stats);
-			aggregatedCentroids.push_back(centroids);
-		}
-
-		for (int i = 0; i < mask.rows; i++)  {
-			for (int j = 0; j < mask.cols; j++)  {
-				if(src.at<uchar>(i, j) == 0) continue;
-				aggregatedLabels.at<int>(i, j) = labels.at<int>(i, j) + curLabel;
-			}
-		}
-		curLabel += numLabels;
-	}
-
-	int newLabelNum = 0;
-	vector<int> newLabels(aggregatedStats.rows, -1);
-	for(int i = 0; i < aggregatedStats.rows; i++) {
-		if(aggregatedStats.at<int>(i, CC_STAT_AREA) < minArea) {
-			continue;
-		}
-		//if(depth.at<float>(aggregatedStats.at<int>(i, CC_STAT_TOP), aggregatedStats.at<int>(i, CC_STAT_LEFT)) == 0) {
-		//	continue;
-		//}
-		newLabels.at(i) = newLabelNum;
-		newLabelNum++;
-	}
-	cout << newLabelNum << endl;
-	vector<vector<Point3f> > meshes(newLabelNum);
-	vector<vector<int> > indices(newLabelNum);
-	Mat indexMap(mask.rows, mask.cols, CV_32S);
-	for (int i = 0; i < mask.rows; i++)  {
-		for (int j = 0; j < mask.cols; j++)  {
-			if(aggregatedLabels.at<int>(i, j) < 0 || newLabels.at(aggregatedLabels.at<int>(i, j)) < 0) {
-				continue;
-			}
-			auto v = hueToRgb((float)newLabels.at(aggregatedLabels.at<int>(i, j)) / newLabelNum);
-			colorLabels.at<Vec3f>(i, j) = v;
-			meshes.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(points3d.at<Vec3f>(i, j));
-			indexMap.at<int>(i, j) = meshes.at(newLabels.at(aggregatedLabels.at<int>(i, j))).size();
-		}
-	}
-	for (int i = 0; i < mask.rows; i++)  {
-		for (int j = 0; j < mask.cols; j++)  {
-			if(aggregatedLabels.at<int>(i, j) < 0 || newLabels.at(aggregatedLabels.at<int>(i, j)) < 0) {
-				continue;
-			}
-			if(i + 1 < mask.rows &&
-				j + 1 < mask.cols &&
-				aggregatedLabels.at<int>(i, j) == aggregatedLabels.at<int>(i + 1, j) &&
-				aggregatedLabels.at<int>(i, j) == aggregatedLabels.at<int>(i, j + 1) &&
-				aggregatedLabels.at<int>(i, j) == aggregatedLabels.at<int>(i + 1, j + 1)) {
-					indices.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(indexMap.at<int>(i, j));
-					indices.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(indexMap.at<int>(i+1, j));
-					indices.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(indexMap.at<int>(i, j+1));
-					indices.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(indexMap.at<int>(i, j+1));
-					indices.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(indexMap.at<int>(i+1, j));
-					indices.at(newLabels.at(aggregatedLabels.at<int>(i, j))).push_back(indexMap.at<int>(i+1, j+1));
-			}
-		}
-	}
-	imshow("clustered", colorLabels);
-	//Mat colorLabelsSave;
-	//colorLabels = colorLabels * 255;
-	//colorLabels.convertTo(colorLabelsSave, CV_8UC3);
-	//imwrite("clustered.png", colorLabelsSave);
-	imshow("p", points3d);
-
-	waitKey(0);
-
 	for(int i = 0; i < meshes.size(); i++) {
 		ofstream myfile;
 		myfile.open (to_string(i) + "mesh.obj");
