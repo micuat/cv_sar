@@ -57,10 +57,92 @@ Vec3f hueToRgb(float hue){
 	return Vec3f(b, g, r);
 }
 
+struct RgbdPoint {
+public:
+	Point3f world_xyz;
+	Point3f bgr;
+	Point2i image_xy;
+	Point2f texture_uv;
+};
+
+class RgbdCluster {
+public:
+	Mat mask;
+	Mat depth;
+	Mat points3d;
+	Mat normals;
+	Mat pointsIndex;
+	vector<RgbdPoint> points;
+	bool bPlane;
+	bool bPointsUpdated;
+
+	RgbdCluster() : bPlane(false), bPointsUpdated(false) {}
+
+	int getNumPoints() {
+		if(bPointsUpdated)
+			return points.size();
+		else return -1;
+	}
+
+	void calculatePoints() {
+		pointsIndex = Mat_<int>::eye(mask.rows, mask.cols) * -1;
+		points.clear();
+		for (int i = 0; i < mask.rows; i++)  {
+			for (int j = 0; j < mask.cols; j++)  {
+				if(mask.at<uchar>(i, j) > 0 && depth.at<float>(i, j) == 0) {
+					RgbdPoint point;
+					point.world_xyz = points3d.at<Point3f>(i, j);
+					point.image_xy = Point2i(j, i);
+
+					mask.at<uchar>(i, j) = 0;
+					pointsIndex.at<int>(i, j) = points.size();
+					points.push_back(point);
+				}
+			}
+		}
+		bPointsUpdated = true;
+	}
+};
+
+void planarSegmentation(RgbdCluster& mainCluster, vector<RgbdCluster>& clusters, int maxPlaneNum = 3, int minArea = 400) {
+	// assert frame size == points3d size
+
+	auto plane = makePtr<RgbdPlane>();
+	plane->setThreshold(0.025f);
+	Mat mask;
+	vector<Vec4f> coeffs;
+	//(*plane)(points3d, frame->normals, mask, coeffs);
+	(*plane)(mainCluster.points3d, mask, coeffs);
+
+	int curLabel = 0;
+	Mat colorLabels = Mat_<Vec3f>(mask.rows, mask.cols);
+	for(int label = 0; label < maxPlaneNum + 1; label++) {
+		clusters.push_back(RgbdCluster());
+		RgbdCluster& cluster = clusters.back();
+		mainCluster.depth.copyTo(cluster.depth);
+		mainCluster.points3d.copyTo(cluster.points3d);
+		if(label < maxPlaneNum) {
+			compare(mask, label, cluster.mask, CMP_EQ);
+			cluster.bPlane = true;
+		} else {
+			compare(mask, label, cluster.mask, CMP_GE); // residual
+		}
+		cluster.calculatePoints();
+	}
+}
+
+void euclideanClustering() {
+/*	connectedComponentsWithStats(clusters.at(i).mask, labels, stats, centroids, 8);
+	for (int i = 0; i < clusters.at(i).mask.rows; i++)  {
+		for (int j = 0; j < clusters.at(i).mask.cols; j++)  {
+			if(src.at<uchar>(i, j) == 0) continue;
+			aggregatedLabels.at<int>(i, j) = labels.at<int>(i, j) + curLabel;
+		}
+	}*/
+}
+
 int main( int argc, char** argv )
 {
-	vector<float> depthLookUp(2048);
-	
 	Mat image, depth;
 	float pixelSize, refDistance;
 	cv::FileStorage file("rgbd.txt", cv::FileStorage::READ);
@@ -68,12 +150,13 @@ int main( int argc, char** argv )
 	file["depth"] >> depth;
 	file["zeroPlanePixelSize"] >> pixelSize;
 	file["zeroPlaneDistance"] >> refDistance;
-	depth = depth * 0.001f;
+	depth = depth * 0.001f; // libfreenect is in [mm]
 
-	float fx = refDistance * 0.5f / pixelSize, // default
+	float fx = refDistance * 0.5f / pixelSize,
 		fy = refDistance * 0.5f / pixelSize,
 		cx = 319.5f,
 		cy = 239.5f;
+
 	Mat cameraMatrix = Mat::eye(3,3,CV_32FC1);
 	{
 		cameraMatrix.at<float>(0,0) = fx;
@@ -93,30 +176,25 @@ int main( int argc, char** argv )
 	depthTo3d(frame->depth, cameraMatrix, points3d);
 	//(*normals)(frame->depth, frame->normals);
 
-	auto plane = makePtr<RgbdPlane>();
-	plane->setThreshold(0.025f);
-	Mat mask;
-	vector<Vec4f> coeffs;
-	//(*plane)(points3d, frame->normals, mask, coeffs);
-	(*plane)(points3d, mask, coeffs);
-	cout<<coeffs.size()<<endl;
+	RgbdCluster mainCluster;
+	mainCluster.points3d = points3d;
+	mainCluster.depth = frame->depth;
+	vector<RgbdCluster> clusters;
+	planarSegmentation(mainCluster, clusters);
 
-	vector<int> pixelCounts(coeffs.size(), 0);
-	Mat_<Vec3f> colorMask(frame->depth.rows, frame->depth.cols);
-	for (int i = 0; i < mask.rows; ++i)
-	{
-		for (int j = 0; j < mask.cols; ++j)
-		{
-			if (mask.at<uchar>(i, j) != 255)
-			{
-				pixelCounts[mask.at<uchar>(i, j)] += 1;
+	for(int i = 0; i < clusters.size(); i++) {
+		imshow(to_string(i), clusters.at(i).mask * 255);
 
-				colorMask.at<Vec3f>(i, j) = hueToRgb(mask.at<uchar>(i, j) * 0.1f);//Vec3f(mask.at<uchar>(i, j) * 0.1f, 1.f - mask.at<uchar>(i, j) * 0.1f, 1);
-			}
+		Mat labels;
+		Mat stats;
+		Mat centroids;
+
+		if(clusters.at(i).bPlane) {
+			continue;
 		}
-	}
-	imshow("planes", colorMask);
 
+	}
+	/*
 	int minArea = 400;
 	int curLabel = 0;
 	Mat colorLabels = Mat_<Vec3f>(mask.rows, mask.cols);
@@ -226,6 +304,7 @@ int main( int argc, char** argv )
 			myfile << "f " << to_string(indices.at(i).at(j)) << "// " << to_string(indices.at(i).at(j+1)) << "// " << to_string(indices.at(i).at(j+2)) << "//" << endl;
 		}
 		myfile.close();
-	}
+	}*/
+	waitKey(0);
 	return 0;
 }
