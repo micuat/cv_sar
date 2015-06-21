@@ -96,6 +96,7 @@ public:
 						RgbdPoint point;
 						point.world_xyz = points3d.at<Point3f>(i, j);
 						point.image_xy = Point2i(j, i);
+						point.texture_uv = Point2f((float)j / mask.cols, (float)i / mask.rows); // TODO
 						
 						pointsIndex.at<int>(i, j) = points.size();
 						points.push_back(point);
@@ -108,7 +109,7 @@ public:
 		bPointsUpdated = true;
 	}
 
-	void calculateFaceIndices() {
+	void calculateFaceIndices(float depthDiff = 0.05f) {
 		if(!bPointsUpdated) {
 			calculatePoints();
 		}
@@ -117,12 +118,23 @@ public:
 				if(mask.at<uchar>(i, j) == 0) {
 					continue;
 				}
-				if(i + 1 < mask.rows &&
-					j + 1 < mask.cols &&
-					mask.at<uchar>(i + 1, j) > 0 &&
+				if(i + 1 == mask.rows || j + 1 == mask.cols) {
+					continue;
+				}
+				if(mask.at<uchar>(i + 1, j) > 0 &&
 					mask.at<uchar>(i, j + 1) > 0 &&
 					mask.at<uchar>(i + 1, j + 1) > 0)
 				{
+					//depth comparison not working?
+					if(abs(depth.at<float>(i, j) - depth.at<float>(i + 1, j)) > depthDiff) {
+						continue;
+					}
+					if(abs(depth.at<float>(i, j) - depth.at<float>(i, j + 1)) > depthDiff) {
+						continue;
+					}
+					if(abs(depth.at<float>(i, j) - depth.at<float>(i + 1, j + 1)) > depthDiff) {
+						continue;
+					}
 					faceIndices.push_back(pointsIndex.at<int>(i, j));
 					faceIndices.push_back(pointsIndex.at<int>(i+1, j));
 					faceIndices.push_back(pointsIndex.at<int>(i, j+1));
@@ -143,13 +155,16 @@ public:
 		fs.open(path);
 		for(int i = 0; i < points.size(); i++) {
 			auto & v = points.at(i).world_xyz;
-			fs << "v " << to_string(v.x) << " " << to_string(v.y) << " " << to_string(v.z) << endl;
+			auto & vt = points.at(i).texture_uv;
+			// negate xy for Unity compatibility
+			fs << "v " << to_string(-v.x) << " " << to_string(-v.y) << " " << to_string(v.z) << endl;
+			fs << "vt " << to_string(vt.x) << " " << to_string(vt.y) << endl;
 		}
 		for(int i = 0; i < faceIndices.size(); i+=3) {
-			fs << "f " << to_string(faceIndices.at(i))
-				<< "// " << to_string(faceIndices.at(i+1))
-				<< "// " << to_string(faceIndices.at(i+2))
-				<< "//" << endl;
+			fs << "f " << to_string(faceIndices.at(i)+1) << "/" << to_string(faceIndices.at(i)+1)
+				<< "/ " << to_string(faceIndices.at(i+1)+1) << "/" << to_string(faceIndices.at(i+1)+1)
+				<< "/ " << to_string(faceIndices.at(i+2)+1) << "/" << to_string(faceIndices.at(i+2)+1)
+				<< "/" << endl;
 		}
 		fs.close();
 	}
